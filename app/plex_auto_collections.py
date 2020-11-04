@@ -12,12 +12,15 @@ try:
     from plexapi.library import MovieSection
     from plexapi.library import ShowSection
     from plexapi.library import Collections
+    from plexapi.exceptions import BadRequest
+    from plexapi.exceptions import NotFound
     from plex_tools import get_map
     from plex_tools import add_to_collection
     from plex_tools import delete_collection
     from plex_tools import get_actor_rkey
     from plex_tools import get_collection
     from plex_tools import get_item
+    from plex_tools import search_plex
     from imdb_tools import tmdb_get_metadata
     from imdb_tools import imdb_get_ids
     from config_tools import Config
@@ -108,6 +111,8 @@ def get_method_pair_year(method_to_parse, values_to_parse):
 
 def update_from_config(config_path, plex, headless=False, no_meta=False, no_images=False):
     config = Config(config_path)
+    shows = config.shows
+    movies = config.movies
     collections = config.collections
     if not headless:
         print("|\n|===================================================================================================|")
@@ -118,6 +123,259 @@ def update_from_config(config_path, plex, headless=False, no_meta=False, no_imag
         radarr = None
         libtype = "show"
     plex_map = get_map(config_path, plex)
+    print("|\n| Running movie and collection update press Ctrl+C to abort at anytime")
+
+    def edit_value (item, name, group=None, key=None, value=None):
+        if group == None or name in group:
+            if group == None or group[name]:
+                if key == None:             key = name
+                if value == None:           value = group[name]
+                try:
+                    edits = {"{}.value".format(key): value, "{}.locked".format(key): 1}
+                    item.edit(**edits)
+                    item.reload()
+                    print("| Detail: {} updated to {}".format(name, value))
+                except BadRequest:
+                    print("| Config Error: {} is an invalid input for the {} attribute".format(value, name))
+            else:
+                print("| Config Error: {} attribute is blank".format(name))
+
+    def genre_and_label_adder(item, group):
+        genres = item.genres
+
+        if "add_genre" in group:
+            if group["add_genre"]:
+                values = group["add_genre"] if isinstance(group["add_genre"], list) else str(group["add_genre"]).split(", ")
+                for v in values:
+                    added = False
+                    for genre in genres:
+                        if genre.tag == v:
+                            added = True
+                            print("| Detail: Genre {} already exists".format(v))
+                    if not added:
+                        item.addGenre(v)
+                        print("| Detail: Genre {} added".format(v))
+            else:
+                print("| Config Error: {} attribute is blank".format("add_genre"))
+
+        if "remove_genre" in group:
+            if group["remove_genre"]:
+                values = group["remove_genre"] if isinstance(group["remove_genre"], list) else str(group["remove_genre"]).split(", ")
+                for v in values:
+                    removed = False
+                    for genre in genres:
+                        if genre.tag == v:
+                            item.removeGenre(v)
+                            removed = True
+                            print("| Detail: Genre {} removed".format(v))
+                    if not removed:
+                        print("| Detail: Genre {} does not exists".format(v))
+            else:
+                print("| Config Error: {} attribute is blank".format("add_genre"))
+
+        if "genre" in group:
+            if group["genre"]:
+                values = group["genre"] if isinstance(group["genre"], list) else str(group["genre"]).split(", ")
+                for genre in genres:
+                    if genre.tag not in values:
+                        item.removeGenre(genre.tag)
+                        print("| Detail: Genre {} removed".format(genre.tag))
+                for v in values:
+                    added = False
+                    for genre in genres:
+                        if genre.tag == v:
+                            added = True
+                            print("| Detail: Genre {} already exists".format(v))
+                    if not added:
+                        item.addGenre(v)
+                        print("| Detail: Genre {} added".format(v))
+            else:
+                print("| Config Error: genre attribute is blank")
+
+        labels = item.labels
+
+        if "add_label" in group:
+            if group["add_label"]:
+                values = group["add_label"] if isinstance(group["add_label"], list) else str(group["add_label"]).split(", ")
+                for v in values:
+                    added = False
+                    for label in labels:
+                        if label.tag == v:
+                            added = True
+                            print("| Detail: Label {} already exists".format(v))
+                    if not added:
+                        item.addLabel(v)
+                        print("| Detail: Label {} added".format(v))
+            else:
+                print("| Config Error: {} attribute is blank".format("add_label"))
+
+        if "remove_label" in group:
+            if group["remove_label"]:
+                values = group["remove_label"] if isinstance(group["remove_label"], list) else str(group["remove_label"]).split(", ")
+                for v in values:
+                    removed = False
+                    for label in labels:
+                        if label.tag == v:
+                            item.removeLabel(v)
+                            removed = True
+                            print("| Detail: Label {} removed".format(v))
+                    if not removed:
+                        print("| Detail: Label {} does not exists".format(v))
+            else:
+                print("| Config Error: {} attribute is blank".format("add_label"))
+
+        if "label" in group:
+            if group["label"]:
+                values = group["label"] if isinstance(group["label"], list) else str(group["label"]).split(", ")
+                for label in labels:
+                    if label.tag not in values:
+                        item.removeLabel(label.tag)
+                        print("| Detail: Label {} removed".format(label.tag))
+                for v in values:
+                    added = False
+                    for label in labels:
+                        if label.tag == v:
+                            added = True
+                            print("| Detail: Label {} already exists".format(v))
+                    if not added:
+                        item.addLabel(v)
+                        print("| Detail: Label {} added".format(v))
+            else:
+                print("| Config Error: label attribute is blank")
+
+    def get_year(group):
+        if "year" in group:
+            if group["year"]:
+                now = datetime.datetime.now()
+                if isinstance(group["year"], int):
+                    if group["year"] in range(1900, now.year + 2):
+                        return group["year"]
+                    else:
+                        print("| Config Error: year attribute must be between 1900-{}".format(now.year + 1))
+                else:
+                    print("| Config Error: year attribute must be an integer")
+            else:
+                print("| Config Error: year attribute is blank")
+        return None
+
+    def get_alt_title(group):
+        if "alt_title" in group:
+            if group["alt_title"]:
+                return group["alt_title"]
+            else:
+                print("| Config Error: alt_title attribute is blank")
+        return None
+
+    def do_sub(item, group):
+        if "sub" in group:
+            if group["sub"]:
+                if isinstance(group["sub"], bool):
+                    if group["sub"] == True and "(SUB)" not in item.title:
+                        edit_value(item, "title", value=item.title + " (SUB)")
+                    elif group["sub"] == False and " (SUB)" in item.title:
+                        edit_value(item, "title", value=item.title[:-6])
+                else:
+                    print("| Config Error: sub attribute must be either true or false")
+            else:
+                print("| Config Error: sub attribute is blank")
+
+    if not no_meta and plex.library_type == "show":
+        for s in shows:
+            print("| \n|===================================================================================================|\n|")
+            show = None
+            year = get_year(shows[s])
+            alt_title = get_alt_title(shows[s])
+            used_alt = False
+
+            show = search_plex(plex, s, headless, year=year) if year else search_plex(plex, s, headless)
+            if not show and alt_title:
+                show = search_plex(plex, alt_title, headless, year=year) if year else search_plex(plex, alt_title, headless)
+                used_alt = True
+
+            if show:
+                item = plex.Server.fetchItem(show.ratingKey)
+                print("| Updating show: {}...".format(alt_title if used_alt else s))
+                if used_alt:
+                    edit_value(item, "title", value=s)                                              # Handle show title
+                edit_value(item, "sort_title", shows[s], key="titleSort")                           # Handle show sort_title
+                edit_value(item, "originally_available", shows[s], key="originallyAvailableAt")     # Handle show originally_available
+                edit_value(item, "rating", shows[s])                                                # Handle show rating
+                edit_value(item, "content_rating", shows[s], key="contentRating")                   # Handle show content_rating
+                edit_value(item, "original_title", shows[s], key="originalTitle")                   # Handle show original_title
+                edit_value(item, "studio", shows[s])                                                # Handle show studio
+                edit_value(item, "tagline", shows[s])                                               # Handle show tagline
+                edit_value(item, "summary", shows[s])                                               # Handle show summary
+                genre_and_label_adder(item, shows[s])                                               # Handle show genres and labels
+                do_sub(item, shows[s])
+                #item.editAdvanced(showOrdering="aired")
+
+                if "seasons" in shows[s]:
+                    if shows[s]["seasons"]:
+                        for season_id in shows[s]["seasons"]:
+                            print("|\n| Updating season {} of {}...".format(season_id, alt_title if used_alt else s))
+                            if isinstance(season_id, int):
+                                try:
+                                    season = item.season(season_id)
+                                    edit_value(season, "title", shows[s]["seasons"][season_id])
+                                    edit_value(season, "summary", shows[s]["seasons"][season_id])
+                                    do_sub(season, shows[s]["seasons"][season_id])
+                                except NotFound:
+                                    print("| Config Error: season {} not found".format(season_id))
+                            else:
+                                print("| Config Error: season {} is invalid it must be a number".format(season_id))
+                    else:
+                        print("| Config Error: season attribute is blank")
+
+                if "episodes" in shows[s]:
+                    if shows[s]["episodes"]:
+                        for episode_id in shows[s]["episodes"]:
+                            m = re.search("[Ss]{1}\d+[Ee]{1}\d+", episode_id)
+                            if m:
+                                output = m.group(0)[1:].split("E" if "E" in m.group(0) else "e")
+                                print("|\n| Updating episode S{}E{} of {}...".format(output[0], output[1], alt_title if used_alt else s))
+                                try:
+                                    episode = item.episode(season=int(output[0]), episode=int(output[1]))
+                                    edit_value(episode, "title", shows[s]["episodes"][episode_id])
+                                    edit_value(episode, "sort_title", shows[s]["episodes"][episode_id], key="titleSort")
+                                    edit_value(episode, "rating", shows[s]["episodes"][episode_id])
+                                    edit_value(episode, "originally_available", shows[s]["episodes"][episode_id], key="originallyAvailableAt")
+                                    edit_value(episode, "summary", shows[s]["episodes"][episode_id])
+                                    do_sub(episode, shows[s]["episodes"][episode_id])
+                                except NotFound:
+                                    print("| Config Error: episode {} of season {} not found".format(int(output[1]), int(output[0])))
+                            else:
+                                print("|\n| Config Error: episode {} invlaid must have S##E## format".format(episode_id))
+                    else:
+                        print("| Config Error: episode attribute is blank")
+
+
+    if not no_meta and plex.library_type == "movie":
+        for m in movies:
+            print("| \n|===================================================================================================|\n|")
+            movie = None
+            year = get_year(movies[m])
+            alt_title = get_alt_title(movies[m])
+            used_alt = False
+
+            movie = search_plex(plex, m, headless, year=year) if year else search_plex(plex, m, headless)
+            if not movie and alt_title:
+                movie = search_plex(plex, alt_title, headless, year=year) if year else search_plex(plex, alt_title, headless)
+                used_alt = True
+
+            if movie:
+                item = plex.Server.fetchItem(movie.ratingKey)
+                print("| Updating movie: {}...".format(alt_title if used_alt else m))
+                if used_alt:
+                    edit_value(item, "title", value=m)                                              # Handle movie title
+                edit_value(item, "sort_title", movies[m], key="titleSort")                          # Handle movie sort_title
+                edit_value(item, "original_title", movies[m], key="originalTitle")                  # Handle movie original_title
+                edit_value(item, "originally_available", movies[m], key="originallyAvailableAt")    # Handle movie originally_available
+                edit_value(item, "rating", movies[m])                                               # Handle movie rating
+                edit_value(item, "content_rating", movies[m], key="contentRating")                  # Handle movie content_rating
+                edit_value(item, "studio", movies[m])                                               # Handle movie studio
+                edit_value(item, "tagline", movies[m])                                              # Handle movie tagline
+                edit_value(item, "summary", movies[m])                                              # Handle movie summary
+                genre_and_label_adder(item, movies[m])                                              # Handle movie genres and labels
     alias = {
         "actors": "actor", "role": "actor", "roles": "actor",
         "content_ratings": "content_rating", "contentRating": "content_rating", "contentRatings": "content_rating",
@@ -1031,7 +1289,7 @@ config = Config(config_path)
 plex = Plex(config_path)
 
 try:
-    if input("| \n| Update Collections from Config? (y/n): ").upper() == "Y":
+    if input("| \n| Update Collections and Movies from Config? (y/n): ").upper() == "Y":
         update_from_config(config_path, plex, False)
 except KeyboardInterrupt:
     pass

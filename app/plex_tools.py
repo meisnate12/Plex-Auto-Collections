@@ -28,6 +28,38 @@ def adjust_space(old_length, display_title):
         display_title += " " * space_length
     return display_title
 
+def search_item(plex, data, exact=None, year=None):
+    if year == None:
+        media_list = plex.Library.search(title=data)
+    else:
+        media_list = plex.Library.search(title=data, year=year)
+    if len(media_list) > 0:
+        for media in media_list:
+            if media.title == data:
+                return media
+        if exact:
+            print("| {}: {} not in Plex, please update from config first".format("Movie" if plex.library_type == "movie" else "Show", data))
+            return None
+        else:
+            m_names = ["| " + (str(i + 1) + ") " + media.title) for i, media in enumerate(media_list)]
+            print("| 0) Do Nothing")
+            print("\n".join(m_names))
+            while True:
+                try:
+                    selection = int(input("| Choose {} number: ".format("movie" if plex.library_type == "movie" else "show"))) - 1
+                    if selection >= 0:
+                        return media_list[selection]
+                    elif selection == -1:
+                        print("| No {} selected".format("movie" if plex.library_type == "movie" else "show"))
+                        return None
+                    else:
+                        print("| Invalid entry")
+                except (IndexError, ValueError):
+                    print("| Invalid entry")
+    else:
+        print("| {}: {} not found".format("movie" if plex.library_type == "movie" else "show", data + (" (" + str(year) + ")" if year else "")))
+        return None
+
 def get_item(plex, data):
     if isinstance(data, int) or isinstance(data, Movie) or isinstance(data, Show):
         try:

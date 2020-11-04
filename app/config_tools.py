@@ -83,6 +83,8 @@ class Config:
             sys.exit("| Scan Error: {}".format(str(e).replace('\n', '\n|\t      ')))
         if Config.valid == True:
             self.collections = check_for_attribute(self.data, "collections", default={}, do_print=False)
+            self.movies = check_for_attribute(self.data, "movies", default={}, do_print=False)
+            self.shows = check_for_attribute(self.data, "shows", default={}, do_print=False)
             self.plex = self.data['plex']
             self.tmdb = check_for_attribute(self.data, "tmdb", default={}, do_print=False)
             self.tautulli = check_for_attribute(self.data, "tautulli", default={}, do_print=False)
@@ -95,6 +97,8 @@ class Config:
             print("| Connecting to Plex...")
             Plex(config_path)
             self.collections = check_for_attribute(self.data, "collections", default={})
+            self.movies = check_for_attribute(self.data, "movies", default={})
+            self.shows = check_for_attribute(self.data, "shows", default={})
             print("| Plex Connection Successful")
             print("|===================================================================================================|")
             if "tmdb" in self.data:
